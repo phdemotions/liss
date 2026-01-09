@@ -1,0 +1,5 @@
+study_id,old_name,new_name,construct,facet,item_number,wave,decision_status,decided_by,decided_on,rationale
+yf24a,nomem_encr2,yf24a_person_id,person_id,,,,locked,liss_team,2024-10-01,Core merge identifier
+cp23o,cp23o001,cp23o_personality_agreeable_i01,personality,agreeable,1,,review,liss_team,2024-10-01,Initial mapping for personality scale
+avars,avars001,avars_background_age,background,age,,,locked,liss_team,2024-10-01,Background age variable
+cp24p,cp24p010,cp24p_personality_extraversion_i10,personality,extraversion,10,,review,liss_team,2024-10-01,Initial mapping for personality scale
