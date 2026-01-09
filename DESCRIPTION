@@ -15,10 +15,12 @@ Imports:
     dplyr,
     haven,
     janitor,
+    jsonlite,
     purrr,
     rlang,
     stringr,
     tibble
 Suggests:
+    pdftools,
     testthat (>= 3.0.0)
 Config/testthat/edition: 3
