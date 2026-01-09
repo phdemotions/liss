@@ -2,7 +2,10 @@ create_test_dictionary <- function(module, include_ids = TRUE) {
   dict <- tibble::tibble(
     module = module,
     old = c("nomem_encr2", "yf24a010"),
-    new = c("person_id_encrypted__raw", "hire_likelihood_self__percent"),
+    new = c(
+      paste0(module, "_person_id_encrypted_raw"),
+      paste0(module, "_hire_likelihood_self_percent")
+    ),
     measurement_label = c(
       "Encrypted household member identifier (merge key)",
       "Likelihood of being hired for target job (0-100)"
@@ -14,7 +17,10 @@ create_test_dictionary <- function(module, include_ids = TRUE) {
   )
 
   if (!include_ids) {
-    dict$new <- c("respondent_id__raw", "hire_likelihood_self__percent")
+    dict$new <- c(
+      paste0(module, "_respondent_id_raw"),
+      paste0(module, "_hire_likelihood_self_percent")
+    )
   }
 
   dict
@@ -40,11 +46,11 @@ create_test_manifest <- function(path) {
       "codebooks/badid_1.0.pdf"
     ),
     id_key_new = c(
-      "person_id_encrypted__raw",
-      "person_id_encrypted__raw",
-      "person_id_encrypted__raw",
-      "person_id_encrypted__raw",
-      "person_id_encrypted__raw"
+      "yf24a_person_id_encrypted_raw",
+      "yf24a_person_id_encrypted_raw",
+      "ambig_person_id_encrypted_raw",
+      "ambig_person_id_encrypted_raw",
+      "badid_person_id_encrypted_raw"
     ),
     id_key_old = c(
       "nomem_encr2",
