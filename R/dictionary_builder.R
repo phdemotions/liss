@@ -15,21 +15,6 @@
 # - Fail-fast checks prevent silent drift and broken merges.
 # =============================================================================
 
-# ---- Dependencies (package-friendly) ----
-# In a package, put these in DESCRIPTION/Imports and remove the checks.
-.require_pkgs <- function(pkgs) {
-  missing <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]
-  if (length(missing) > 0) {
-    stop(
-      "Missing required packages: ", paste(missing, collapse = ", "),
-      "\nInstall them and try again."
-    )
-  }
-  invisible(TRUE)
-}
-
-.require_pkgs(c("haven", "dplyr", "tibble", "purrr", "stringr", "rlang", "janitor"))
-
 # =============================================================================
 # 1) Ontology: allowed metrics + validator
 # =============================================================================
@@ -49,6 +34,18 @@ liss_ontology_regex <- paste0(
   "$"
 )
 
+#' Validate new names against the LISS ontology
+#'
+#' @param new_names Character vector of candidate variable names.
+#'
+#' @return TRUE when all names match the ontology; otherwise errors.
+#' @export
+#'
+#' @examples
+#' liss_validate_new_names("wellbeing__mean")
+#' \dontrun{
+#' liss_validate_new_names("wellbeing_mean")
+#' }
 liss_validate_new_names <- function(new_names) {
   new_names <- as.character(new_names)
 
@@ -69,6 +66,17 @@ liss_forbidden_patterns <- c(
   "efa", "cfa", "alpha"
 )
 
+#' Validate that names contain no forbidden tokens
+#'
+#' @param new_names Character vector of candidate variable names.
+#'
+#' @return TRUE when all names pass; otherwise errors.
+#' @export
+#'
+#' @examples
+#' \dontrun{
+#' liss_validate_no_forbidden_tokens("treatment__binary")
+#' }
 liss_validate_no_forbidden_tokens <- function(new_names) {
   new_names <- as.character(new_names)
 
@@ -86,6 +94,32 @@ liss_validate_no_forbidden_tokens <- function(new_names) {
   TRUE
 }
 
+#' Validate a dictionary for ontology and uniqueness
+#'
+#' @param dict Dictionary tibble with at least `old` and `new` columns.
+#' @param strict Logical; if TRUE, disallow NA values in `new`.
+#'
+#' @return TRUE when dictionary passes all checks; otherwise errors.
+liss_validate_dictionary <- function(dict, strict = FALSE) {
+  req <- c("old", "new")
+  if (!all(req %in% names(dict))) {
+    stop("Dictionary must contain columns: ", paste(req, collapse = ", "))
+  }
+
+  if (anyDuplicated(dict$old) > 0) stop("Dictionary has duplicated 'old' names.")
+  if (anyDuplicated(dict$new) > 0) stop("Dictionary has duplicated 'new' names.")
+
+  if (strict && any(is.na(dict$new))) {
+    stop("Dictionary has missing 'new' names while strict = TRUE.")
+  }
+
+  non_missing_new <- dict$new[!is.na(dict$new)]
+  liss_validate_new_names(non_missing_new)
+  liss_validate_no_forbidden_tokens(non_missing_new)
+
+  TRUE
+}
+
 # =============================================================================
 # 2) Extract SPSS metadata from .sav
 # =============================================================================
@@ -95,7 +129,7 @@ liss_extract_sav_meta <- function(path) {
 
   df <- haven::read_sav(path)
 
-  meta <- tibble::tibble(old = names(df)) %>%
+  meta <- tibble::tibble(old = names(df)) |>
     dplyr::mutate(
       label_raw = purrr::map_chr(.data$old, ~{
         lbl <- haven::var_label(df[[.x]])
@@ -128,16 +162,16 @@ liss_suggest_metric_from_label <- function(lbl) {
 liss_slugify_constructish <- function(x, max_words = 4) {
   if (is.na(x) || identical(x, "")) return(NA_character_)
 
-  x %>%
-    stringr::str_to_lower() %>%
-    stringr::str_replace_all("\\([^\\)]*\\)", " ") %>%   # remove (...) text
-    stringr::str_replace_all("\\[[^\\]]*\\]", " ") %>%   # remove [...] text
-    stringr::str_replace_all("[^a-z0-9\\s]", " ") %>%
-    stringr::str_squish() %>%
-    stringr::str_remove_all("\\b(the|a|an|of|to|for|and|or|in|on|at|with|about)\\b") %>%
-    stringr::str_squish() %>%
-    stringr::word(1, max_words) %>%
-    stringr::str_replace_all("\\s+", "_") %>%
+  x |>
+    stringr::str_to_lower() |>
+    stringr::str_replace_all("\\([^\\)]*\\)", " ") |>
+    stringr::str_replace_all("\\[[^\\]]*\\]", " ") |>
+    stringr::str_replace_all("[^a-z0-9\\s]", " ") |>
+    stringr::str_squish() |>
+    stringr::str_remove_all("\\b(the|a|an|of|to|for|and|or|in|on|at|with|about)\\b") |>
+    stringr::str_squish() |>
+    stringr::word(1, max_words) |>
+    stringr::str_replace_all("\\s+", "_") |>
     janitor::make_clean_names()
 }
 
@@ -154,6 +188,23 @@ liss_suggest_new_name <- function(old, label_raw) {
 # 4) Build dictionary (module-aware, override-aware, fail-fast)
 # =============================================================================
 
+#' Build a dictionary from a .sav file
+#'
+#' @param sav_path Path to the SPSS .sav file.
+#' @param module_id Module identifier (e.g., \"yf24a\").
+#' @param required_old Optional character vector of required raw variables.
+#' @param overrides Optional tibble with columns `old`, `new`, and optionally
+#'   `measurement_label` to override suggestions.
+#' @param fail_on_na_new Logical; if TRUE, error when any `new` is NA.
+#' @param enforce_forbidden_tokens Logical; if TRUE, enforce forbidden-token rules.
+#'
+#' @return A list with the raw data frame and the dictionary tibble.
+#' @export
+#'
+#' @examples
+#' \dontrun{
+#' built <- liss_build_dictionary(\"path/to/file.sav\", module_id = \"yf24a\")
+#' }
 liss_build_dictionary <- function(
     sav_path,
     module_id,
@@ -169,12 +220,12 @@ liss_build_dictionary <- function(
   out <- liss_extract_sav_meta(sav_path)
   meta <- out$meta
 
-  dict <- meta %>%
+  dict <- meta |>
     dplyr::mutate(
       module = as.character(module_id),
       new_suggested = purrr::map2_chr(.data$old, .data$label_raw, liss_suggest_new_name),
       measurement_label = dplyr::coalesce(.data$label_raw, .data$old)
-    ) %>%
+    ) |>
     dplyr::select(
       .data$module, .data$old, .data$new_suggested, .data$measurement_label,
       .data$label_raw, .data$class
@@ -185,7 +236,7 @@ liss_build_dictionary <- function(
       stop("overrides must include columns: old, new (and optionally measurement_label).")
     }
 
-    overrides2 <- overrides %>%
+    overrides2 <- overrides |>
       dplyr::transmute(
         old = as.character(.data$old),
         new_override = as.character(.data$new),
@@ -196,15 +247,16 @@ liss_build_dictionary <- function(
         )
       )
 
-    dict <- dict %>%
-      dplyr::left_join(overrides2, by = "old") %>%
+    dict <- dict |>
+      dplyr::left_join(overrides2, by = "old") |>
       dplyr::mutate(
         new = dplyr::coalesce(.data$new_override, .data$new_suggested),
         measurement_label = dplyr::coalesce(.data$ml_override, .data$measurement_label)
-      ) %>%
+      ) |>
       dplyr::select(-dplyr::any_of(c("new_override", "ml_override")))
   } else {
-    dict <- dict %>% dplyr::mutate(new = .data$new_suggested)
+    dict <- dict |>
+      dplyr::mutate(new = .data$new_suggested)
   }
 
   # ---- Integrity checks ----
@@ -244,18 +296,33 @@ liss_build_dictionary <- function(
 # 5) Apply dictionary: rename + preserve provenance (labels, attrs, or both)
 # =============================================================================
 
+#' Rename variables with a dictionary and preserve provenance
+#'
+#' @param df Data frame to rename.
+#' @param dict Dictionary with columns `old`, `new`, and `measurement_label`.
+#' @param keep_provenance Logical; if TRUE, stores dictionary attributes and
+#'   variable labels derived from the dictionary.
+#' @param keep_unmapped Logical; if FALSE, drops columns not present in `dict$old`.
+#'
+#' @return Renamed data frame.
+#' @export
+#'
+#' @examples
+#' \dontrun{
+#' built <- liss_build_dictionary("path/to/file.sav", module_id = "yf24a")
+#' df_named <- liss_rename_with_dictionary(built$df, built$dict)
+#' }
 liss_rename_with_dictionary <- function(
     df,
     dict,
-    keep_old = c("labels", "attribute", "both", "none"),
+    keep_provenance = TRUE,
     keep_unmapped = TRUE        # if FALSE, drops columns not present in dict$old
 ) {
-  keep_old <- match.arg(keep_old)
 
   req <- c("old", "new", "measurement_label")
   if (!all(req %in% names(dict))) stop("Dictionary must contain: ", paste(req, collapse = ", "))
 
-  dict2 <- dict %>%
+  dict2 <- dict |>
     dplyr::transmute(
       old = as.character(.data$old),
       new = as.character(.data$new),
@@ -264,7 +331,8 @@ liss_rename_with_dictionary <- function(
     )
 
   # Only apply rows with non-missing new names
-  dict_apply <- dict2 %>% dplyr::filter(!is.na(.data$new))
+  dict_apply <- dict2 |>
+    dplyr::filter(!is.na(.data$new))
 
   missing_old <- setdiff(dict_apply$old, names(df))
   if (length(missing_old) > 0) {
@@ -285,13 +353,13 @@ liss_rename_with_dictionary <- function(
   df_new <- dplyr::rename(df, !!!rename_quos)
 
   # Preserve provenance as attributes
-  if (keep_old %in% c("attribute", "both")) {
+  if (isTRUE(keep_provenance)) {
     attr(df_new, "name_dictionary") <- dict2
     attr(df_new, "name_dictionary_timestamp") <- as.character(Sys.time())
   }
 
   # Preserve provenance as variable labels (best for human inspection)
-  if (keep_old %in% c("labels", "both")) {
+  if (isTRUE(keep_provenance)) {
     for (i in seq_len(nrow(dict_apply))) {
       new_nm <- dict_apply$new[i]
       old_nm <- dict_apply$old[i]
@@ -307,6 +375,19 @@ liss_rename_with_dictionary <- function(
 # 6) Drift report: compare a .sav against an existing dictionary
 # =============================================================================
 
+#' Report dictionary drift against a new .sav file
+#'
+#' @param sav_path Path to a .sav file.
+#' @param dict_existing Existing dictionary with `old` and `new` columns.
+#'
+#' @return A tibble listing variables in the sav but not the dictionary, and
+#'   vice versa.
+#' @export
+#'
+#' @examples
+#' \dontrun{
+#' drift <- liss_dictionary_drift_report("path/to/file.sav", dict_existing)
+#' }
 liss_dictionary_drift_report <- function(sav_path, dict_existing) {
   out <- liss_extract_sav_meta(sav_path)
   old_in_sav <- out$meta$old
@@ -338,5 +419,5 @@ liss_dictionary_drift_report <- function(sav_path, dict_existing) {
 #   fail_on_na_new = FALSE
 # )
 #
-# df_named <- liss_rename_with_dictionary(built$df, built$dict, keep_old = "both")
+# df_named <- liss_rename_with_dictionary(built$df, built$dict, keep_provenance = TRUE)
 # drift <- liss_dictionary_drift_report("/mnt/data/yf24a_EN_1.0p.sav", built$dict)

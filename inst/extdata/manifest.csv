@@ -1,0 +1,2 @@
+module,version,sav_file,dict_file,codebook_file,id_key_new,id_key_old,notes
+yf24a,1.0,data/yf24a_1.0.sav,dictionaries/dict_yf24a_1.0.rds,codebooks/yf24a_EN_1.0.pdf,person_id_encrypted__raw,nomem_encr2,Example manifest entry
