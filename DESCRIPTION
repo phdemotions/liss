@@ -1,0 +1,24 @@
+Package: liss
+Type: Package
+Title: LISS Dictionary Builder and Ontology Tools
+Version: 0.1.0
+Authors@R: c(
+    person("LISS", "Team", email = "liss@example.com", role = c("aut", "cre"))
+  )
+Description: Tools to build and validate dictionary mappings for LISS datasets,
+    enforce variable naming ontology, preserve provenance, and detect drift across
+    releases.
+License: MIT + file LICENSE
+Encoding: UTF-8
+LazyData: true
+Imports:
+    dplyr,
+    haven,
+    janitor,
+    purrr,
+    rlang,
+    stringr,
+    tibble
+Suggests:
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3
