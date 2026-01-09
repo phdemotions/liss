@@ -7,7 +7,7 @@
 #
 # Goal:
 # - Build a dictionary (old -> new + measurement_label) from an SPSS .sav
-# - Enforce a strict naming ontology: construct[_facet][_target]__metric
+# - Enforce a strict naming ontology: study_construct[_facet][_target][_item][_wave][_metric]
 # - Apply the dictionary to rename columns while preserving provenance (labels/attrs)
 #
 # Design notes:
@@ -20,19 +20,68 @@
 # =============================================================================
 
 liss_allowed_metrics <- c(
-  "binary", "count", "mean", "sum", "index", "percent", "percentile", "likert", "z", "raw"
+  "raw", "mean", "sum", "index", "z", "binary", "count", "percent", "percentile"
 )
 
-liss_ontology_regex <- paste0(
-  "^",
-  "[a-z]+",            # construct start
-  "(_[a-z]+)*",        # optional snake_case extensions (facet/target etc.)
-  "__",
-  "(",
-  paste(liss_allowed_metrics, collapse = "|"),
-  ")",
-  "$"
+liss_forbidden_tokens <- c(
+  "dv", "iv", "mediator", "moderator", "control", "treatment",
+  "efa", "cfa", "alpha", "question", "item", "scale", "score", "wave"
 )
+
+liss_forbidden_token_patterns <- c(
+  "^q\\d+$", "^block\\d+$", "^page\\d+$", "^factor\\d+$", "^component\\d+$"
+)
+
+liss_is_valid_name_token <- function(token) {
+  stringr::str_detect(token, "^[a-z][a-z0-9]*$")
+}
+
+liss_is_valid_new_name <- function(name) {
+  if (!stringr::str_detect(name, "^[a-z][a-z0-9_]*$")) return(FALSE)
+  if (stringr::str_detect(name, "__")) return(FALSE)
+  if (stringr::str_detect(name, "^_|_$")) return(FALSE)
+  if (nchar(name) > 50) return(FALSE)
+
+  parts <- strsplit(name, "_", fixed = TRUE)[[1]]
+  if (length(parts) < 2 || length(parts) > 7) return(FALSE)
+
+  if (!liss_is_valid_name_token(parts[1])) return(FALSE)
+
+  metric <- parts[length(parts)]
+  has_metric <- metric %in% liss_allowed_metrics
+
+  item_idx <- which(stringr::str_detect(parts, "^i\\d{2,3}$"))
+  wave_idx <- which(stringr::str_detect(parts, "^w\\d{2}$"))
+
+  if (length(item_idx) > 1 || length(wave_idx) > 1) return(FALSE)
+  if (has_metric && length(parts) >= 2 && metric != parts[length(parts)]) return(FALSE)
+
+  if (has_metric && any(parts[-length(parts)] %in% liss_allowed_metrics)) return(FALSE)
+
+  if (length(wave_idx) == 1) {
+    if (has_metric && wave_idx != (length(parts) - 1)) return(FALSE)
+    if (!has_metric && wave_idx != length(parts)) return(FALSE)
+  }
+
+  if (length(item_idx) == 1) {
+    if (length(wave_idx) == 1 && item_idx > wave_idx) return(FALSE)
+    if (length(wave_idx) == 0 && has_metric && item_idx != (length(parts) - 1)) return(FALSE)
+    if (length(wave_idx) == 0 && !has_metric && item_idx != length(parts)) return(FALSE)
+  }
+
+  if (!liss_is_valid_name_token(parts[2])) return(FALSE)
+  if (parts[2] %in% liss_allowed_metrics) return(FALSE)
+  if (stringr::str_detect(parts[2], "^i\\d{2,3}$|^w\\d{2}$")) return(FALSE)
+
+  for (part in parts) {
+    if (part %in% liss_allowed_metrics) next
+    if (stringr::str_detect(part, "^i\\d{2,3}$")) next
+    if (stringr::str_detect(part, "^w\\d{2}$")) next
+    if (!liss_is_valid_name_token(part)) return(FALSE)
+  }
+
+  TRUE
+}
 
 #' Validate new names against the LISS ontology
 #'
@@ -42,29 +91,22 @@ liss_ontology_regex <- paste0(
 #' @export
 #'
 #' @examples
-#' liss_validate_new_names("wellbeing__mean")
+#' liss_validate_new_names("yf24a_wellbeing_mean")
 #' \dontrun{
 #' liss_validate_new_names("wellbeing_mean")
 #' }
 liss_validate_new_names <- function(new_names) {
   new_names <- as.character(new_names)
 
-  bad <- new_names[!stringr::str_detect(new_names, liss_ontology_regex)]
+  bad <- new_names[!purrr::map_lgl(new_names, liss_is_valid_new_name)]
   if (length(bad) > 0) {
     stop(
-      "Invalid new variable names (must match construct[_facet][_target]__metric).\n",
+      "Invalid new variable names (must match study_construct[_facet][_target][_item][_wave][_metric]).\n",
       "Bad names:\n", paste(unique(bad), collapse = "\n")
     )
   }
   TRUE
 }
-
-# Optional: enforce "no forbidden substrings" policy (analysis-role leakage, wave codes)
-liss_forbidden_patterns <- c(
-  "\\biv\\b", "\\bdv\\b", "mediator", "moderator", "treatment", "control",
-  "\\bwave\\b", "\\bw[0-9]+\\b", "\\byf[0-9]+\\b", "\\bq[0-9]+\\b",
-  "efa", "cfa", "alpha"
-)
 
 #' Validate that names contain no forbidden tokens
 #'
@@ -75,15 +117,19 @@ liss_forbidden_patterns <- c(
 #'
 #' @examples
 #' \dontrun{
-#' liss_validate_no_forbidden_tokens("treatment__binary")
+#' liss_validate_no_forbidden_tokens("yf24a_treatment_binary")
 #' }
 liss_validate_no_forbidden_tokens <- function(new_names) {
   new_names <- as.character(new_names)
 
-  hits <- purrr::map_lgl(
-    new_names,
-    ~ any(stringr::str_detect(.x, liss_forbidden_patterns))
-  )
+  hits <- purrr::map_lgl(new_names, function(name) {
+    tokens <- strsplit(name, "_", fixed = TRUE)[[1]]
+    if (any(tokens %in% liss_forbidden_tokens)) return(TRUE)
+    if (any(purrr::map_lgl(tokens, ~ any(stringr::str_detect(.x, liss_forbidden_token_patterns))))) {
+      return(TRUE)
+    }
+    FALSE
+  })
 
   if (any(hits)) {
     stop(
@@ -154,7 +200,6 @@ liss_suggest_metric_from_label <- function(lbl) {
     stringr::str_detect(l, "\\b0\\s*[-–]\\s*100\\b|\\b0\\s*to\\s*100\\b|\\bpercent\\b|\\bpercentage\\b") ~ "percent",
     stringr::str_detect(l, "\\byes\\b\\s*/\\s*\\bno\\b|\\btrue\\b\\s*/\\s*\\bfalse\\b|\\bbinary\\b") ~ "binary",
     stringr::str_detect(l, "\\bhow many\\b|\\bnumber of\\b|\\bcount\\b|\\btimes\\b") ~ "count",
-    stringr::str_detect(l, "\\blikert\\b|\\bstrongly\\s+agree\\b|\\bstrongly\\s+disagree\\b") ~ "likert",
     TRUE ~ "raw"
   )
 }
@@ -175,13 +220,13 @@ liss_slugify_constructish <- function(x, max_words = 4) {
     janitor::make_clean_names()
 }
 
-liss_suggest_new_name <- function(old, label_raw) {
+liss_suggest_new_name <- function(old, label_raw, module_id) {
   # Intentionally conservative and "dumb": avoids inventing construct semantics.
   metric <- liss_suggest_metric_from_label(label_raw)
   base   <- liss_slugify_constructish(label_raw)
 
   if (is.na(base) || identical(base, "")) return(NA_character_)
-  paste0(base, "__", metric)
+  paste(module_id, base, metric, sep = "_")
 }
 
 # =============================================================================
@@ -223,7 +268,10 @@ liss_build_dictionary <- function(
   dict <- meta |>
     dplyr::mutate(
       module = as.character(module_id),
-      new_suggested = purrr::map2_chr(.data$old, .data$label_raw, liss_suggest_new_name),
+      new_suggested = purrr::pmap_chr(
+        list(.data$old, .data$label_raw, .data$module),
+        liss_suggest_new_name
+      ),
       measurement_label = dplyr::coalesce(.data$label_raw, .data$old)
     ) |>
     dplyr::select(
@@ -411,10 +459,10 @@ liss_dictionary_drift_report <- function(sav_path, dict_existing) {
 #   module_id = "yf24a",
 #   overrides = tibble::tribble(
 #     ~old,         ~new,                                   ~measurement_label,
-#     "nomem_encr2", "person_id_encrypted__raw",             "Encrypted household member identifier (merge key)",
-#     "yf24a_m",     "fieldwork_year_month__raw",            "Fieldwork period (YYYYMM)",
-#     "yf24a010",    "hire_likelihood_self__percent",        "Likelihood of being hired for target job (0–100)",
-#     "yf24a011",    "performance_expectation_self__percentile","Expected performance vs others in same job (0–100)"
+#     "nomem_encr2", "yf24a_person_id_encrypted_raw",             "Encrypted household member identifier (merge key)",
+#     "yf24a_m",     "yf24a_fieldwork_year_month_raw",            "Fieldwork period (YYYYMM)",
+#     "yf24a010",    "yf24a_hire_likelihood_self_percent",        "Likelihood of being hired for target job (0–100)",
+#     "yf24a011",    "yf24a_performance_expectation_self_percentile","Expected performance vs others in same job (0–100)"
 #   ),
 #   fail_on_na_new = FALSE
 # )
